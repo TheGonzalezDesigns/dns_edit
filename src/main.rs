@@ -1,20 +1,17 @@
-use std::fs;
-use std::collections::HashMap;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::fs;
 
 #[derive(Serialize)]
 struct Entry<'a> {
     line_number: usize,
-    names: Vec<&'a str>
+    names: Vec<&'a str>,
 }
 
 impl<'a> Entry<'a> {
-   pub fn new(line_number: usize, names: Vec<&'a str>) -> Self {
-        Entry {
-            line_number,
-            names
-        }
-   }
+    pub fn new(line_number: usize, names: Vec<&'a str>) -> Self {
+        Entry { line_number, names }
+    }
 }
 
 type Comment<'a> = &'a str;
@@ -23,10 +20,10 @@ type Comment<'a> = &'a str;
 enum DNSEntry<'a> {
     Entry(Entry<'a>),
     Comment(Comment<'a>),
-    Space
+    Space,
 }
 
-impl <'a> DNSEntry<'a> {
+impl<'a> DNSEntry<'a> {
     pub fn entry(line_number: usize, names: Vec<&'a str>) -> Self {
         let entry = Entry::new(line_number, names);
         DNSEntry::Entry(entry)
@@ -60,5 +57,8 @@ fn main() {
         }
     }
 
-    println!("{}", serde_json::to_string_pretty(&dns).expect("Failed to serialize the dns"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&dns).expect("Failed to serialize the dns")
+    );
 }
