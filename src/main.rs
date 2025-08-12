@@ -108,6 +108,12 @@ struct DnsFile {
     comments: Vec<String>,
 }
 
+impl std::fmt::Display for DnsFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_hosts_string())
+    }
+}
+
 impl DnsFile {
     fn from_content(content: &str) -> Result<Self> {
         let mut entries = Vec::new();
@@ -153,7 +159,7 @@ impl DnsFile {
         Ok(DnsFile { entries, comments })
     }
     
-    fn to_string(&self) -> String {
+    fn to_hosts_string(&self) -> String {
         let mut result = String::new();
         
         // Add comments
@@ -166,7 +172,7 @@ impl DnsFile {
         for entry in &self.entries {
             result.push_str(&entry.ip);
             for hostname in &entry.hostnames {
-                result.push_str(" ");
+                result.push(' ');
                 result.push_str(hostname);
             }
             result.push('\n');
@@ -214,7 +220,7 @@ impl DnsFile {
         // Check if hostname already exists
         for entry in &mut self.entries {
             if entry.hostnames.contains(&hostname.to_string()) {
-                return Err(DnsEditError::ParseError(format!("Hostname {} already exists", hostname)));
+                return Err(DnsEditError::ParseError(format!("Hostname {hostname} already exists")));
             }
         }
         
@@ -250,7 +256,7 @@ impl DnsFile {
         self.entries.retain(|entry| !entry.hostnames.is_empty());
         
         if !updated {
-            Err(DnsEditError::ParseError(format!("Hostname {} not found", hostname)))
+            Err(DnsEditError::ParseError(format!("Hostname {hostname} not found")))
         } else {
             Ok(())
         }
@@ -276,7 +282,7 @@ fn init_git_repo() -> Result<()> {
     // Create backup directory if it doesn't exist
     let backup_dir_path = backup_dir();
     fs::create_dir_all(&backup_dir_path)
-        .map_err(|e| DnsEditError::Io(e))?;
+        .map_err(DnsEditError::Io)?;
     
     // Check if git repository already exists
     let git_dir = PathBuf::from(&backup_dir_path).join(".git");
@@ -286,7 +292,7 @@ fn init_git_repo() -> Result<()> {
             .args(["init"])
             .current_dir(&backup_dir_path)
             .output()
-            .map_err(|e| DnsEditError::GitError(format!("Failed to initialize git repo: {}", e)))?;
+            .map_err(|e| DnsEditError::GitError(format!("Failed to initialize git repo: {e}")))?;
         
         if !output.status.success() {
             return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
@@ -316,25 +322,25 @@ fn backup_hosts_file(message: &str) -> Result<()> {
     let backup_dir_path = backup_dir();
     
     let hosts_content = fs::read_to_string(&hosts_file_path)
-        .map_err(|e| DnsEditError::Io(e))?;
+        .map_err(DnsEditError::Io)?;
     
     let backup_path = PathBuf::from(&backup_dir_path).join("hosts");
     fs::write(&backup_path, hosts_content)
-        .map_err(|e| DnsEditError::Io(e))?;
+        .map_err(DnsEditError::Io)?;
     
     // Add to git
     let _ = ProcessCommand::new("git")
         .args(["add", "hosts"])
         .current_dir(&backup_dir_path)
         .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to add to git: {}", e)))?;
+        .map_err(|e| DnsEditError::GitError(format!("Failed to add to git: {e}")))?;
     
     // Commit changes
     let output = ProcessCommand::new("git")
         .args(["commit", "-m", message])
         .current_dir(&backup_dir_path)
         .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to commit: {}", e)))?;
+        .map_err(|e| DnsEditError::GitError(format!("Failed to commit: {e}")))?;
     
     if !output.status.success() && !String::from_utf8_lossy(&output.stderr).contains("nothing to commit") {
         return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
@@ -359,7 +365,7 @@ fn restore_from_backup(commit: Option<&str>) -> Result<()> {
         .args(["checkout", commit_ref, "--", "hosts"])
         .current_dir(&backup_dir_path)
         .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to checkout: {}", e)))?;
+        .map_err(|e| DnsEditError::GitError(format!("Failed to checkout: {e}")))?;
     
     if !output.status.success() {
         return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
@@ -368,10 +374,10 @@ fn restore_from_backup(commit: Option<&str>) -> Result<()> {
     // Copy restored file back to hosts file
     let backup_path = PathBuf::from(&backup_dir_path).join("hosts");
     let backup_content = fs::read_to_string(&backup_path)
-        .map_err(|e| DnsEditError::Io(e))?;
+        .map_err(DnsEditError::Io)?;
     
     fs::write(&hosts_file_path, backup_content)
-        .map_err(|e| DnsEditError::Io(e))?;
+        .map_err(DnsEditError::Io)?;
     
     Ok(())
 }
@@ -449,7 +455,7 @@ mod tests {
 ::1 ip6-localhost
 ";
         let dns_file = DnsFile::from_content(content).unwrap();
-        let output = dns_file.to_string();
+        let output = dns_file.to_hosts_string();
         
         assert!(output.contains("# Comment line"));
         assert!(output.contains("127.0.0.1 localhost"));
@@ -562,7 +568,7 @@ mod tests {
 fn main() -> Result<()> {
     // Set up error handling for the CLI
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
     Ok(())
@@ -593,7 +599,7 @@ fn run() -> Result<()> {
         
         Commands::Add { ip, hostname } => {
             // Backup before modification
-            backup_hosts_file(&format!("Backup before adding {} -> {}", hostname, ip))?;
+            backup_hosts_file(&format!("Backup before adding {hostname} -> {ip}"))?;
             
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
@@ -603,14 +609,14 @@ fn run() -> Result<()> {
             dns_file.add_entry(ip, hostname)?;
             
             // Write back to hosts file
-            fs::write(&hosts_file_path, dns_file.to_string())?;
+            fs::write(&hosts_file_path, dns_file.to_hosts_string())?;
             
-            println!("Added DNS entry: {} -> {}", hostname, ip);
+            println!("Added DNS entry: {hostname} -> {ip}");
         }
         
         Commands::Remove { hostname } => {
             // Backup before modification
-            backup_hosts_file(&format!("Backup before removing {}", hostname))?;
+            backup_hosts_file(&format!("Backup before removing {hostname}"))?;
             
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
@@ -620,14 +626,14 @@ fn run() -> Result<()> {
             dns_file.remove_entry(hostname)?;
             
             // Write back to hosts file
-            fs::write(&hosts_file_path, dns_file.to_string())?;
+            fs::write(&hosts_file_path, dns_file.to_hosts_string())?;
             
-            println!("Removed DNS entry for {}", hostname);
+            println!("Removed DNS entry for {hostname}");
         }
         
         Commands::Update { hostname, ip } => {
             // Backup before modification
-            backup_hosts_file(&format!("Backup before updating {} to {}", hostname, ip))?;
+            backup_hosts_file(&format!("Backup before updating {hostname} to {ip}"))?;
             
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
@@ -637,15 +643,15 @@ fn run() -> Result<()> {
             dns_file.update_entry(hostname, ip)?;
             
             // Write back to hosts file
-            fs::write(&hosts_file_path, dns_file.to_string())?;
+            fs::write(&hosts_file_path, dns_file.to_hosts_string())?;
             
-            println!("Updated DNS entry: {} -> {}", hostname, ip);
+            println!("Updated DNS entry: {hostname} -> {ip}");
         }
         
         Commands::Restore { commit } => {
             restore_from_backup(commit.as_deref())?;
             println!("Restored hosts file from backup{}", 
-                     commit.as_ref().map_or(String::new(), |c| format!(" (commit {})", c)));
+                     commit.as_ref().map_or(String::new(), |c| format!(" (commit {c})")));
         }
     }
     
