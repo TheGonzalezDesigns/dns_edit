@@ -1,10 +1,7 @@
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::net::IpAddr;
-use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -13,9 +10,6 @@ fn hosts_file() -> String {
     std::env::var("HOSTS_FILE").unwrap_or_else(|_| "/etc/hosts".to_string())
 }
 
-fn backup_dir() -> String {
-    std::env::var("BACKUP_DIR").unwrap_or_else(|_| "/usr/local/dns".to_string())
-}
 
 #[derive(Debug, Error)]
 enum DnsEditError {
@@ -25,8 +19,6 @@ enum DnsEditError {
     #[error("Failed to parse hosts file: {0}")]
     ParseError(String),
     
-    #[error("Git operation failed: {0}")]
-    GitError(String),
     
     #[error("Invalid IP address: {0}")]
     InvalidIp(String),
@@ -88,21 +80,15 @@ enum Commands {
         #[arg(index = 2)]
         ip: String,
     },
-    /// Restore a specific backup
-    Restore {
-        /// Commit hash to restore (defaults to latest)
-        #[arg(short, long)]
-        commit: Option<String>,
-    },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct DnsEntry {
     ip: String,
     hostnames: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct DnsFile {
     entries: Vec<DnsEntry>,
     comments: Vec<String>,
@@ -278,109 +264,8 @@ impl DnsFile {
     }
 }
 
-fn init_git_repo() -> Result<()> {
-    // Create backup directory if it doesn't exist
-    let backup_dir_path = backup_dir();
-    fs::create_dir_all(&backup_dir_path)
-        .map_err(DnsEditError::Io)?;
-    
-    // Check if git repository already exists
-    let git_dir = PathBuf::from(&backup_dir_path).join(".git");
-    if !git_dir.exists() {
-        // Initialize git repository
-        let output = ProcessCommand::new("git")
-            .args(["init"])
-            .current_dir(&backup_dir_path)
-            .output()
-            .map_err(|e| DnsEditError::GitError(format!("Failed to initialize git repo: {e}")))?;
-        
-        if !output.status.success() {
-            return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
-        }
-        
-        // Configure git user for commits
-        let _ = ProcessCommand::new("git")
-            .args(["config", "user.name", "DNS Edit"])
-            .current_dir(&backup_dir_path)
-            .output();
-            
-        let _ = ProcessCommand::new("git")
-            .args(["config", "user.email", "dns-edit@localhost"])
-            .current_dir(&backup_dir_path)
-            .output();
-    }
-    
-    Ok(())
-}
 
-fn backup_hosts_file(message: &str) -> Result<()> {
-    // Initialize git repository
-    init_git_repo()?;
-    
-    // Copy current hosts file to backup directory
-    let hosts_file_path = hosts_file();
-    let backup_dir_path = backup_dir();
-    
-    let hosts_content = fs::read_to_string(&hosts_file_path)
-        .map_err(DnsEditError::Io)?;
-    
-    let backup_path = PathBuf::from(&backup_dir_path).join("hosts");
-    fs::write(&backup_path, hosts_content)
-        .map_err(DnsEditError::Io)?;
-    
-    // Add to git
-    let _ = ProcessCommand::new("git")
-        .args(["add", "hosts"])
-        .current_dir(&backup_dir_path)
-        .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to add to git: {e}")))?;
-    
-    // Commit changes
-    let output = ProcessCommand::new("git")
-        .args(["commit", "-m", message])
-        .current_dir(&backup_dir_path)
-        .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to commit: {e}")))?;
-    
-    if !output.status.success() && !String::from_utf8_lossy(&output.stderr).contains("nothing to commit") {
-        return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
-    }
-    
-    Ok(())
-}
 
-fn restore_from_backup(commit: Option<&str>) -> Result<()> {
-    // Initialize git repository
-    init_git_repo()?;
-    
-    // Backup current hosts file before restoring
-    backup_hosts_file("Auto-backup before restore")?;
-    
-    // Checkout specific commit or HEAD
-    let commit_ref = commit.unwrap_or("HEAD");
-    let backup_dir_path = backup_dir();
-    let hosts_file_path = hosts_file();
-    
-    let output = ProcessCommand::new("git")
-        .args(["checkout", commit_ref, "--", "hosts"])
-        .current_dir(&backup_dir_path)
-        .output()
-        .map_err(|e| DnsEditError::GitError(format!("Failed to checkout: {e}")))?;
-    
-    if !output.status.success() {
-        return Err(DnsEditError::GitError(String::from_utf8_lossy(&output.stderr).to_string()));
-    }
-    
-    // Copy restored file back to hosts file
-    let backup_path = PathBuf::from(&backup_dir_path).join("hosts");
-    let backup_content = fs::read_to_string(&backup_path)
-        .map_err(DnsEditError::Io)?;
-    
-    fs::write(&hosts_file_path, backup_content)
-        .map_err(DnsEditError::Io)?;
-    
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -598,9 +483,6 @@ fn run() -> Result<()> {
         }
         
         Commands::Add { ip, hostname } => {
-            // Backup before modification
-            backup_hosts_file(&format!("Backup before adding {hostname} -> {ip}"))?;
-            
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
             let mut dns_file = DnsFile::from_content(&content)?;
@@ -615,9 +497,6 @@ fn run() -> Result<()> {
         }
         
         Commands::Remove { hostname } => {
-            // Backup before modification
-            backup_hosts_file(&format!("Backup before removing {hostname}"))?;
-            
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
             let mut dns_file = DnsFile::from_content(&content)?;
@@ -632,9 +511,6 @@ fn run() -> Result<()> {
         }
         
         Commands::Update { hostname, ip } => {
-            // Backup before modification
-            backup_hosts_file(&format!("Backup before updating {hostname} to {ip}"))?;
-            
             // Read and parse hosts file
             let content = fs::read_to_string(&hosts_file_path)?;
             let mut dns_file = DnsFile::from_content(&content)?;
@@ -648,11 +524,6 @@ fn run() -> Result<()> {
             println!("Updated DNS entry: {hostname} -> {ip}");
         }
         
-        Commands::Restore { commit } => {
-            restore_from_backup(commit.as_deref())?;
-            println!("Restored hosts file from backup{}", 
-                     commit.as_ref().map_or(String::new(), |c| format!(" (commit {c})")));
-        }
     }
     
     Ok(())
